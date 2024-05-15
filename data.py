@@ -22,35 +22,28 @@ import random
 
 # ds.close()
 
-def thing(thing, thong, thang):
-    return thing, thong, thang
+temperature = np.random.randn(1000, 4, 4)
+lon = np.arange(4)
+lat = np.arange(4)
+time = np.arange(1000)
 
-bruh = [1, 2], 3, 4
-
-print(thing(*bruh))
-
-# temperature = np.random.randn(1000, 64, 64)
-# lon = np.arange(64)
-# lat = np.arange(64)
-# time = np.arange(1000)
-
-# ds = xr.Dataset(
-#     data_vars=dict(
-#         temperature=(['time', 'lon', 'lat'], temperature)
-#     ),
-#     coords=dict(
-#         lon=('lon', lon),
-#         lat=('lat', lat),
-#         time=time
-#     ),
-#     attrs=dict(description="Random test data for the single regression model")
-# )
+ds = xr.Dataset(
+    data_vars=dict(
+        temperature=(['time', 'lon', 'lat'], temperature)
+    ),
+    coords=dict(
+        lon=('lon', lon),
+        lat=('lat', lat),
+        time=time
+    ),
+    attrs=dict(description="Random test data for the single regression model")
+)
 
 #data = ds['temperature']
 
 #print(data[0:36].shape)
 
-#ds.to_netcdf('D:/Documents/Code/research/data/testData.nc')
+ds.to_netcdf('D:/Documents/Code/research/data/testData.nc')
 
 # arr = np.array([[[1, 2, 3, 4], 
 #                  [5, 6, 7, 8], 
