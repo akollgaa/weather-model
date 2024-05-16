@@ -14,10 +14,10 @@ XTRAIN_DATA_PATH = 'D:/Documents/Code/research/data/testData.nc'
 YTRAIN_DATA_PATH = 'D:/Documents/Code/research/data/testData.nc'
 DATA_VAR = 'temperature'
 BATCH_SIZE = 32
-STEPS_PER_EPOCH = int(1000 / 32) # random guess; updated later
+STEPS_PER_EPOCH = int(1000 / 32)  # random guess; updated later
 EPOCHS = 4
 VALIDATION_SPLIT = 0.2
-VALIDATION_STEP = 5 # random guess; updated later
+VALIDATION_STEP = 5  # random guess; updated later
 SAVE_MODEL = False
 KERAS_MODELS_PATH = 'D:/Documents/Code/research/keras-models'
 
@@ -25,6 +25,8 @@ KERAS_MODELS_PATH = 'D:/Documents/Code/research/keras-models'
 class CustomModel(keras.Model):
     def train_step(self, data):
         x1, x2, y = data
+
+        print(x1.shape, x2.shape, y.shape)
 
         with tf.GradientTape() as tape:
             yPred = self([x1, x2], training=True)
@@ -95,7 +97,7 @@ def getData():
     dataX = dsX[DATA_VAR].to_numpy()
 
     dataY = dsY[DATA_VAR].to_numpy()
-    # Essientally flattens the data so it can be compared to the output
+    # Essentially flattens the data, so it can be compared to the output
     dataY = dataY.reshape(dataY.shape[0], dataY.shape[1] * dataY.shape[2])
 
     # Normalize the data
@@ -295,7 +297,6 @@ def fitModelWithGenerator():
     return history, model
 
 
-
 # Do not recommend using method because it does not
 # implement a proper validation_data scheme or
 # strategy for faster processing.
@@ -318,6 +319,7 @@ def fitModelWithSequence():
     )
 
     return history, model
+
 
 history, model = fitModelWithGenerator()
 

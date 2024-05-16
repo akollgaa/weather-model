@@ -23,27 +23,31 @@ import random
 # ds.close()
 
 temperature = np.random.randn(1000, 4, 4)
+precipitation = np.random.rand(1000, 4, 4)
+humidity = np.random.rand(1000, 4, 4)
 lon = np.arange(4)
 lat = np.arange(4)
 time = np.arange(1000)
 
 ds = xr.Dataset(
     data_vars=dict(
-        temperature=(['time', 'lon', 'lat'], temperature)
+        temperature=(['time', 'lon', 'lat'], temperature),
+        precipitation=(['time', 'lon', 'lat'], precipitation),
+        humidity=(['time', 'lon', 'lat'], humidity)
     ),
     coords=dict(
         lon=('lon', lon),
         lat=('lat', lat),
         time=time
     ),
-    attrs=dict(description="Random test data for the single regression model")
+    attrs=dict(description="Random test data for a regression model")
 )
 
 #data = ds['temperature']
 
 #print(data[0:36].shape)
 
-ds.to_netcdf('D:/Documents/Code/research/data/testData.nc')
+ds.to_netcdf('D:/Documents/Code/research/data/largeTestData.nc')
 
 # arr = np.array([[[1, 2, 3, 4], 
 #                  [5, 6, 7, 8], 
