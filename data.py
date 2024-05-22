@@ -22,32 +22,39 @@ import random
 
 # ds.close()
 
-temperature = np.random.randn(1000, 4, 4)
-precipitation = np.random.rand(1000, 4, 4)
-humidity = np.random.rand(1000, 4, 4)
-lon = np.arange(4)
-lat = np.arange(4)
-time = np.arange(1000)
+ds = xr.open_dataset(f'D:/Documents/Code/research/data/timed-data/data1.nc')
 
-ds = xr.Dataset(
-    data_vars=dict(
-        temperature=(['time', 'lon', 'lat'], temperature),
-        precipitation=(['time', 'lon', 'lat'], precipitation),
-        humidity=(['time', 'lon', 'lat'], humidity)
-    ),
-    coords=dict(
-        lon=('lon', lon),
-        lat=('lat', lat),
-        time=time
-    ),
-    attrs=dict(description="Random test data for a regression model")
-)
+print(len(ds))
 
-#data = ds['temperature']
+for data in ds:
+    print(ds[data].shape)
 
-#print(data[0:36].shape)
 
-ds.to_netcdf('D:/Documents/Code/research/data/largeTestData.nc')
+
+# for x in range(1000):
+#
+#     temperature = np.arange(4 * 4).reshape(4, 4) + (2 * x)
+#     precipitation = np.random.rand(4, 4)
+#     humidity = np.random.rand(4, 4)
+#     lon = np.arange(4)
+#     lat = np.arange(4)
+#
+#     ds = xr.Dataset(
+#         data_vars=dict(
+#             temperature=(['lon', 'lat'], temperature),
+#             precipitation=(['lon', 'lat'], precipitation),
+#             humidity=(['lon', 'lat'], humidity)
+#         ),
+#         coords=dict(
+#             lon=('lon', lon),
+#             lat=('lat', lat),
+#         ),
+#         attrs=dict(description="Random test data for a regression model")
+#     )
+#
+#     #print(data[0:36].shape)
+#
+#     ds.to_netcdf(f'D:/Documents/Code/research/data/timed-data/data{x}.nc')
 
 # arr = np.array([[[1, 2, 3, 4], 
 #                  [5, 6, 7, 8], 

@@ -2,6 +2,7 @@ import tensorflow as tf
 import xarray as xr
 import numpy as np
 import keras
+from math import prod
 
 X_TRAIN_DATA_PATH = 'D:/Documents/Code/research/data/largeTestData.nc'
 Y_TRAIN_DATA_PATH = 'D:/Documents/Code/research/data/largeTestData.nc'
@@ -32,6 +33,16 @@ class CustomModel(keras.Model):
         return {m.name: m.result() for m in self.metrics}
 
 
+# A more specific version of an append function for numpy
+# Allows the array to grow in a new dimension continuously
+def append_to_array(array1, array2):
+    if array1 is None or array2 is None:
+        return array2
+    elif len(array1.shape) == len(array2.shape):
+        return np.array([array1, array2])
+    return np.append(array1, [array2], axis=0)
+
+
 class WeatherDataGenerator:
     def __init__(self, dim, steps_per_epoch):
         self.dim = dim
@@ -43,32 +54,31 @@ class WeatherDataGenerator:
         return self.steps_per_epoch
 
     def __getitem__(self, index):
-        ds = xr.open_dataset(X_TRAIN_DATA_PATH)
-        start_batch_x = self.gather_batches(ds, self.start_index, index)
-        end_batch_x = self.gather_batches(ds, self.start_index + 1, index)
-        ds.close()
+        start_batch_x = None
+        end_batch_x = None
+        batch_y = None
+        for i in range(self.start_index + (index * BATCH_SIZE), self.start_index + ((index + 1) * BATCH_SIZE)):
+            current_start_x_batch = self.gather_batches(X_TRAIN_DATA_PATH, i)
+            start_batch_x = append_to_array(start_batch_x, current_start_x_batch)
 
-        ds = xr.open_dataset(Y_TRAIN_DATA_PATH)
-        batch_y = self.gather_batches(ds, self.start_index, index)
-        ds.close()
+            current_end_x_batch = self.gather_batches(X_TRAIN_DATA_PATH, i + 1)
+            end_batch_x = append_to_array(end_batch_x, current_end_x_batch)
 
-        # We must flatten y so it matches the output shape
-        batch_y = batch_y.reshape(batch_y.shape[0], batch_y.shape[1] * batch_y.shape[2])
+            current_batch_y = self.gather_batches(Y_TRAIN_DATA_PATH, i)
+            batch_y = append_to_array(batch_y, current_batch_y)
+            batch_y = np.reshape(batch_y, (batch_y.shape[0], -1))  # Flattens the array
 
         return start_batch_x, end_batch_x, batch_y
 
-    def gather_batches(self, dataset, start_index, index):
-        batch = None
-        for data in dataset:
-            # Slices through the time component of the data
-            data_array = dataset[data][int(start_index + (index * BATCH_SIZE)):
-                                       int(start_index + (index + 1) * BATCH_SIZE)]
-            data_array = self.normalize(data_array)
-            if batch is None:  # On the first try it creates an array
-                batch = np.array(data_array)
-            else:  # After it appends to the array
-                batch = np.append(batch, data_array, axis=1)
-        return batch
+    def gather_batches(self, file_path, index):
+        ds = xr.open_dataset(f'{file_path}data{index}.nc')
+        combined_data = None
+        for data in ds:
+            data_array = ds[data]
+            data_array = self.normalize(data_array)  # Note: converts to a numpy array
+            combined_data = append_to_array(combined_data, data_array)
+        ds.close()
+        return combined_data
 
     @staticmethod
     def normalize(data_array):
@@ -99,9 +109,9 @@ def create_compiled_model(input_shape):
     model = create_model(input_shape)
 
     model.compile(
-        optimizer='adam',
-        loss='mean_squared_error',
-        metrics=['accuracy', 'mean_squared_error']
+        optimizer=keras.optimizers.Adam(),
+        loss=keras.losses.mean_squared_error,
+        metrics=[keras.metrics.mean_squared_error]
     )
 
     return model
@@ -110,16 +120,16 @@ def create_compiled_model(input_shape):
 def fit_model_with_generator(input_shape):
     model = create_compiled_model((input_shape[1], input_shape[2]))
 
-    steps_per_epoch = int((input_shape[0] * (1-VALIDATION_SPLIT)) // BATCH_SIZE) - 1
+    steps_per_epoch = int((input_shape[0] * (1 - VALIDATION_SPLIT)) // BATCH_SIZE) - 1
 
     dataset_generator = WeatherDataGenerator(input_shape, steps_per_epoch)
 
     dataset = tf.data.Dataset.from_generator(
         dataset_generator,
         output_signature=(
-            tf.TensorSpec(shape=(BATCH_SIZE, input_shape[1], input_shape[2]), dtype=tf.int32),
-            tf.TensorSpec(shape=(BATCH_SIZE, input_shape[1], input_shape[2]), dtype=tf.int32),
-            tf.TensorSpec(shape=(BATCH_SIZE, input_shape[1] * input_shape[2]), dtype=tf.int32)
+            tf.TensorSpec(shape=(BATCH_SIZE, *input_shape), dtype=tf.float32),
+            tf.TensorSpec(shape=(BATCH_SIZE, *input_shape), dtype=tf.float32),
+            tf.TensorSpec(shape=(BATCH_SIZE, prod(input_shape)), dtype=tf.float32)
         )
     )
 
@@ -136,14 +146,11 @@ def fit_model_with_generator(input_shape):
 
 def calculate_input_shape():
     ds = xr.open_dataset(X_TRAIN_DATA_PATH)
-    shape = None
+    shape = ()
+    counter = 0
     for data in ds:
-        if shape is None:
-            shape = ds[data].shape
-        else:
-            # We add data to the second column of data
-            # We can add it this way because we know all data arrays have the same shape
-            shape = (shape[0], shape[1] + ds[data].shape[1], shape[2])
+        shape = (counter, *ds[data].shape)
+        counter += 1
     return shape
 
 
