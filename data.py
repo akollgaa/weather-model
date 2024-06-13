@@ -1,3 +1,6 @@
+import fnmatch
+import os
+
 import numpy as np
 import pandas as pd
 import packaging as pack
@@ -22,12 +25,43 @@ import random
 
 # ds.close()
 
-ds = xr.open_dataset(f'D:/Documents/Code/research/data/timed-data/data1.nc')
+# ds = xr.open_dataset(f'D:/Documents/Code/research/wrfout/wrfout_d02_2023-06-20_00%3A00%3A00')
+# temp = ds['T']
+#
+# print(temp)
+# val = temp[0][:2, :2, :2].to_numpy()
+#
+# print(val)
+#
+# ds.close()
 
-print(len(ds))
+XTRAIN_DATA_PATH = 'D:/Documents/Code/research/wrfout'
+VALIDATION_SPLIT = 0.2
+BATCH_SIZE = 4
+fileCount = len(fnmatch.filter(os.listdir(XTRAIN_DATA_PATH), '*'))
 
-for data in ds:
-    print(ds[data].shape)
+dim = (fileCount,)
+length = int(np.floor((dim[0] * (1 - VALIDATION_SPLIT)) / BATCH_SIZE)) - 1
+length = int(dim[0] * (1 - VALIDATION_SPLIT))
+def getFilePath(index):
+    day = '0' if index != (dim[0] - 1) else '1'
+    minute = str((index % 12) * 5).zfill(2)
+    hour = str(index // 12).zfill(2)
+
+    if day == '1':  # Edge case
+        hour = '00'
+
+    return f'{XTRAIN_DATA_PATH}/wrfout_d02_2023-06-2{day}_{hour}%3A{minute}%3A00'
+
+for i in range(fileCount):
+    path = getFilePath(i)
+    try:
+        ds = xr.open_dataset(path)
+        temp = ds['T'][0][:2, :4, :3].to_numpy()
+        ds.close()
+    except Exception as e:
+        print(e)
+
 
 
 

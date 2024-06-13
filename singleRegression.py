@@ -2,6 +2,7 @@ import fnmatch
 import os
 from math import prod
 from copy import deepcopy
+import faulthandler
 
 import numpy as np
 import tensorflow as tf
@@ -15,17 +16,19 @@ from keras import layers
 from keras.utils import Sequence
 import random
 
-XTRAIN_DATA_PATH = 'D:/Documents/Code/research/data/timed-data/'
-YTRAIN_DATA_PATH = 'D:/Documents/Code/research/data/actual-timed-data/'
-DATA_VAR = 'temperature'
-BATCH_SIZE = 2
+XTRAIN_DATA_PATH = 'D:/Documents/Code/research/wrfout'
+YTRAIN_DATA_PATH = 'D:/Documents/Code/research/wrfout'
+DATA_VAR = 'T'
+BATCH_SIZE = 4
 STEPS_PER_EPOCH = int(1000 / 32)  # random guess; updated later
-EPOCHS = 3
+EPOCHS = 100
 VALIDATION_SPLIT = 0.2
 VALIDATION_STEP = 5  # random guess; updated later
-LEARNING_RATE = 0.0008 # 0.001 is default
+LEARNING_RATE = 0.001 # 0.001 is default
 SAVE_MODEL = False
 KERAS_MODELS_PATH = 'D:/Documents/Code/research/keras-models'
+
+CUBE_SIZE = 4
 
 
 class CustomModel(keras.Model):
@@ -67,15 +70,17 @@ class CustomModel(keras.Model):
 
 # Creates a model with one input of variable length
 def createModel(inputShape):
-    input1 = keras.Input(shape=inputShape, name='input1') # Takes one time step
-    input2 = keras.Input(shape=inputShape, name='input2') # Takes the second time step
+    input1 = keras.Input(shape=inputShape, name='input1')  # Takes one time step
+    input2 = keras.Input(shape=inputShape, name='input2')  # Takes the second time step
     x1 = layers.Flatten()(input1)
     # x2 = layers.Flatten()(input2)
     # x1 = layers.Dense(x1.shape[1], activation='linear', name='layer01')(x1)
     # x2 = layers.Dense(x2.shape[1], activation='linear', name='layer02')(x2)
     # x = layers.Concatenate()([x1, x2])
-    x = layers.Dense(x1.shape[1], activation='linear', name='layer1')(x1)
-    output = layers.Dense((inputShape[0] * inputShape[1]))(x) # Applies linear activation
+    x2 = layers.Dense(x1.shape[1], activation='linear', name='layer1')(x1)
+    x3 = layers.Dense(x2.shape[1], activation='linear', name='layer2')(x2)
+    x4 = layers.Dense(x2.shape[1], activation='linear', name='layer3')(x3)
+    output = layers.Dense(prod(inputShape), name='output')(x4)  # Applies linear activation
     
     return CustomModel(inputs=[input1, input2], outputs=output)
 
@@ -91,10 +96,19 @@ def createCompiledModel(inputDim):
     return model
 
 def getInputDim():
-    ds = xr.open_dataset(f'{XTRAIN_DATA_PATH}data0.nc')
-    fileCount = len(fnmatch.filter(os.listdir(XTRAIN_DATA_PATH), '*.nc'))
-    dim = (fileCount,) + ds[DATA_VAR].shape
+    #ds = xr.open_dataset(f'{XTRAIN_DATA_PATH}/wrfout_d02_2023-06-20_00%3A00%3A00')
+    fileCount = len(fnmatch.filter(os.listdir(XTRAIN_DATA_PATH), '*'))
+    #dim = (fileCount,) + ds[DATA_VAR].shape[1:]  # First value is a time dimension of 1
+    dim = (fileCount, CUBE_SIZE, CUBE_SIZE, CUBE_SIZE)
+    #ds.close()
+    return dim
+
+def getDataDim():
+    ds = xr.open_dataset(f'{XTRAIN_DATA_PATH}/wrfout_d02_2023-06-20_00%3A00%3A00')
+    dim = ds[DATA_VAR].shape
     ds.close()
+    # Here we change the size of dim to limit the amount of data that gets fed in
+    dim = (dim[0], dim[1] // 5, dim[2] // 10, dim[3] // 10)
     return dim
 
 # Gather the data by loading everything in np arrays
@@ -164,7 +178,7 @@ class WeatherSequence(Sequence):
 
 # Creates a generator to get data
 class WeatherGenerator:
-    def __init__(self, xFilename, yFilename, dataVar, batchSize, epochs, validationSplit, dim):
+    def __init__(self, xFilename, yFilename, dataVar, batchSize, epochs, validationSplit, dim, dsDim):
         self.xFilename = xFilename
         self.yFilename = yFilename
         self.dataVar = dataVar
@@ -172,55 +186,70 @@ class WeatherGenerator:
         self.epochs = epochs
         self.validationSplit = validationSplit
         self.dim = dim
+        self.dsDim = dsDim
         stepsPerEpoch = int(np.floor((self.dim[0] * (1 - self.validationSplit)) / self.batchSize)) - 1
         self.length = stepsPerEpoch
         self.startIndex = int(self.dim[0] * validationSplit)
         self.trainOnX = True
         self.index = 0
+        self.regionIndex = (0, 0, 0)
 
     def __len__(self):
         return self.length
     
-    def __getitem__(self, index):
+    def __getitem__(self, index, regionIndex):
         batchedX1Data = None
         batchedX2Data = None
         batchedYData = None
         for i in range(self.startIndex + (index * self.batchSize), self.startIndex + ((index + 1) * self.batchSize)):
-            dsX1 = xr.open_dataset(f'{self.xFilename}data{i}.nc')
-            data = dsX1[self.dataVar]
-            data = data.to_numpy()
-            #data = data / np.amax(data)
-            if batchedX1Data is None:
-                batchedX1Data = deepcopy(data)
-            elif len(batchedX1Data.shape) == 2:
-                batchedX1Data = np.array([batchedX1Data, deepcopy(data)])
-            else:
-                batchedX1Data = np.append(batchedX1Data, [deepcopy(data)], axis=0)
-            dsX1.close()
+            path = self.getFilePath(i)
+            try:
+                dsX1 = xr.open_dataset(path)
+                data = dsX1[self.dataVar][0][regionIndex[0]: regionIndex[0]+CUBE_SIZE,
+                                             regionIndex[1]: regionIndex[1]+CUBE_SIZE,
+                                             regionIndex[2]: regionIndex[2]+CUBE_SIZE]
+                data = np.array([data.to_numpy()])  # Expand dims by 1
+                #data = data / np.amax(data)
+                if batchedX1Data is None:
+                    batchedX1Data = deepcopy(data)
+                else:
+                    batchedX1Data = np.append(batchedX1Data, deepcopy(data), axis=0)
+                dsX1.close()
+            except Exception as e:
+                raise Exception(f"{i} BatchX1Data error: {e}")
 
-            dsX2 = xr.open_dataset(f'{self.xFilename}data{i + 1}.nc')
-            data = dsX2[self.dataVar]
-            data = data.to_numpy()
-            #data = data / np.amax(data)
-            if batchedX2Data is None:
-                batchedX2Data = deepcopy(data)
-            elif len(batchedX2Data.shape) == 2:
-                batchedX2Data = np.array([batchedX2Data, deepcopy(data)])
-            else:
-                batchedX2Data = np.append(batchedX2Data, [deepcopy(data)], axis=0)
-            dsX2.close()
 
-            dsY = xr.open_dataset(f'{self.yFilename}data{i}.nc')
-            data = dsY[self.dataVar]
-            data = data.to_numpy()
-            #data = data / np.amax(data)
-            if batchedYData is None:
-                batchedYData = deepcopy(data)
-            elif len(batchedYData.shape) == 2:
-                batchedYData = np.array([batchedYData, deepcopy(data)])
-            else:
-                batchedYData = np.append(batchedYData, [deepcopy(data)], axis=0)
-            dsY.close()
+            path = self.getFilePath(i+2)
+            try:
+                dsX2 = xr.open_dataset(path)
+                data = dsX2[self.dataVar][0][regionIndex[0]: regionIndex[0]+CUBE_SIZE,
+                                             regionIndex[1]: regionIndex[1]+CUBE_SIZE,
+                                             regionIndex[2]: regionIndex[2]+CUBE_SIZE]
+                data = np.array([data.to_numpy()])  # Expand dims by 1
+                #data = data / np.amax(data)
+                if batchedX2Data is None:
+                    batchedX2Data = deepcopy(data)
+                else:
+                    batchedX2Data = np.append(batchedX2Data, deepcopy(data), axis=0)
+                dsX2.close()
+            except Exception as e:
+                raise Exception(f"{i} BatchX2Data error: {e}")
+
+            path = self.getFilePath(i+1)
+            try:
+                dsY = xr.open_dataset(path)
+                data = dsY[self.dataVar][0][regionIndex[0]: regionIndex[0]+CUBE_SIZE,
+                                            regionIndex[1]: regionIndex[1]+CUBE_SIZE,
+                                            regionIndex[2]: regionIndex[2]+CUBE_SIZE]
+                data = np.array([data.to_numpy()])  # Expand dims by 1
+                #data = data / np.amax(data)
+                if batchedYData is None:
+                    batchedYData = deepcopy(data)
+                else:
+                    batchedYData = np.append(batchedYData, deepcopy(data), axis=0)
+                dsY.close()
+            except Exception as e:
+                raise Exception(f"{i} BatchYData error: {e}")
 
         # Makes the y data flat
         batchedYData = batchedYData.reshape(batchedYData.shape[0], prod(batchedYData.shape[1:]))
@@ -248,11 +277,31 @@ class WeatherGenerator:
     def normalizeData(self, data):
         data = data.to_numpy()
         return data / np.amax(data)
-    
+
+    # Both the X and Y data paths are the same. We use x here
+    def getFilePath(self, index):
+        day = '0' if index != (self.dim[0]-1) else '1'
+        minute = str((index % 12) * 5).zfill(2)
+        hour = str(index // 12).zfill(2)
+
+        if day == '1':  # Edge case
+            hour = '00'
+
+        return f'{self.xFilename}/wrfout_d02_2023-06-2{day}_{hour}%3A{minute}%3A00'
+
+
     def __call__(self):
         while True:
-            yield self.__getitem__(self.index % self.__len__())
+            region = (self.regionIndex[0] % self.dsDim[1],
+                      self.regionIndex[1] % self.dsDim[2],
+                      self.regionIndex[2] % self.dsDim[3])
+            yield self.__getitem__(self.index % self.__len__(), region)
             self.index += 1
+            self.regionIndex = (self.index // self.__len__(),
+                                self.regionIndex[0] // self.dsDim[1],
+                                self.regionIndex[1] // self.dsDim[2])
+
+
 
 class ValidationData:
 
@@ -287,41 +336,47 @@ class ValidationData:
         batchedX2Data = None
         batchedYData = None
         for i in range((index * self.batchSize), ((index + 1) * self.batchSize)):
-            dsX1 = xr.open_dataset(f'{self.xFilename}data{i}.nc')
-            data = dsX1[self.dataVar]
-            data = data.to_numpy()
-            #data = data / np.amax(data)
-            if batchedX1Data is None:
-                batchedX1Data = data
-            elif len(batchedX1Data.shape) == 2:
-                batchedX1Data = np.array([batchedX1Data, data])
-            else:
-                batchedX1Data = np.append(batchedX1Data, [data], axis=0)
-            dsX1.close()
+            path = self.getFilePath(i)
+            try:
+                dsX1 = xr.open_dataset(path)
+                data = dsX1[self.dataVar][0][:CUBE_SIZE, :CUBE_SIZE, :CUBE_SIZE]
+                data = np.array([data.to_numpy()])
+                #data = data / np.amax(data)
+                if batchedX1Data is None:
+                    batchedX1Data = data
+                else:
+                    batchedX1Data = np.append(batchedX1Data, data, axis=0)
+                dsX1.close()
+            except Exception as e:
+                raise Exception(f"{i} Validation BatchX1Data: {e}")
 
-            dsX2 = xr.open_dataset(f'{self.xFilename}data{i + 1}.nc')
-            data = dsX2[self.dataVar]
-            data = data.to_numpy()
-            #data = data / np.amax(data)
-            if batchedX2Data is None:
-                batchedX2Data = data
-            elif len(batchedX2Data.shape) == 2:
-                batchedX2Data = np.array([batchedX2Data, data])
-            else:
-                batchedX2Data = np.append(batchedX2Data, [data], axis=0)
-            dsX2.close()
+            path = self.getFilePath(i+2)
+            try:
+                dsX2 = xr.open_dataset(path)
+                data = dsX2[self.dataVar][0][:CUBE_SIZE, :CUBE_SIZE, :CUBE_SIZE]
+                data = np.array([data.to_numpy()])
+                #data = data / np.amax(data)
+                if batchedX2Data is None:
+                    batchedX2Data = data
+                else:
+                    batchedX2Data = np.append(batchedX2Data, data, axis=0)
+                dsX2.close()
+            except Exception as e:
+                raise Exception(f"{i} Validation BatchX2Data: {e}")
 
-            dsY = xr.open_dataset(f'{self.yFilename}data{i}.nc')
-            data = dsY[self.dataVar]
-            data = data.to_numpy()
-            #data = data / np.amax(data)
-            if batchedYData is None:
-                batchedYData = data
-            elif len(batchedYData.shape) == 2:
-                batchedYData = np.array([batchedYData, data])
-            else:
-                batchedYData = np.append(batchedYData, [data], axis=0)
-            dsY.close()
+            path = self.getFilePath(i+1)
+            try:
+                dsY = xr.open_dataset(path)
+                data = dsY[self.dataVar][0][:CUBE_SIZE, :CUBE_SIZE, :CUBE_SIZE]
+                data = np.array([data.to_numpy()])
+                #data = data / np.amax(data)
+                if batchedYData is None:
+                    batchedYData = data
+                else:
+                    batchedYData = np.append(batchedYData, data, axis=0)
+                dsY.close()
+            except Exception as e:
+                raise Exception(f"{i} Validation BatchYData: {e}")
 
         batchedYData = batchedYData.reshape(batchedYData.shape[0], prod(batchedYData.shape[1:]))
 
@@ -349,16 +404,32 @@ class ValidationData:
         data = data.to_numpy()
         return data / np.amax(data)
 
+    # Both the X and Y data paths are the same. We use x here
+    def getFilePath(self, index):
+        day = '0' if index != (self.dim[0]-1) else '1'
+        minute = str((index % 12) * 5).zfill(2)
+        hour = str(index // 12).zfill(2)
+
+        if day == '1':  # Edge case
+            hour = '00'
+
+        return f'{self.xFilename}/wrfout_d02_2023-06-2{day}_{hour}%3A{minute}%3A00'
+
 def fitModelWithGenerator():
     dim = getInputDim()
 
+    dsDim = getDataDim()
+
     # Starts from zero
     # Subtract one to give some headway for data
-    STEPS_PER_EPOCH = int(np.floor((dim[0] * (1 - VALIDATION_SPLIT)) / BATCH_SIZE)) - 1
+    STEPS_PER_EPOCH = int(((np.floor((dim[0] * (1 - VALIDATION_SPLIT)) / BATCH_SIZE)) - 1)
+                          * (dsDim[1] // CUBE_SIZE)
+                          * (dsDim[2] // CUBE_SIZE)
+                          * (dsDim[3] // CUBE_SIZE))
 
-    VALIDATION_STEP = int(np.floor((dim[0]*VALIDATION_SPLIT) / BATCH_SIZE))
+    # VALIDATION_STEP = int(np.floor((dim[0]*VALIDATION_SPLIT) / BATCH_SIZE))
 
-    datasetGenerator = WeatherGenerator(XTRAIN_DATA_PATH, YTRAIN_DATA_PATH, DATA_VAR, BATCH_SIZE, EPOCHS, VALIDATION_SPLIT, dim)
+    datasetGenerator = WeatherGenerator(XTRAIN_DATA_PATH, YTRAIN_DATA_PATH, DATA_VAR, BATCH_SIZE, EPOCHS, VALIDATION_SPLIT, dim, dsDim)
 
     dataset = tf.data.Dataset.from_generator(
         datasetGenerator,
@@ -368,15 +439,15 @@ def fitModelWithGenerator():
                 tf.TensorSpec(shape=(BATCH_SIZE, prod(dim[1:])), dtype=tf.float32))
     )
 
-    validationGenerator = ValidationData(XTRAIN_DATA_PATH, YTRAIN_DATA_PATH, DATA_VAR, VALIDATION_SPLIT, VALIDATION_STEP, BATCH_SIZE, dim)
+    # validationGenerator = ValidationData(XTRAIN_DATA_PATH, YTRAIN_DATA_PATH, DATA_VAR, VALIDATION_SPLIT, VALIDATION_STEP, BATCH_SIZE, dim)
 
-    validationDataset = tf.data.Dataset.from_generator(
-        validationGenerator,
-        output_signature=
-            (tf.TensorSpec(shape=(BATCH_SIZE,) + dim[1:], dtype=tf.float32),
-                tf.TensorSpec(shape=(BATCH_SIZE,) + dim[1:], dtype=tf.float32),
-                tf.TensorSpec(shape=(BATCH_SIZE, prod(dim[1:])), dtype=tf.float32))
-    )
+    # validationDataset = tf.data.Dataset.from_generator(
+    #     validationGenerator,
+    #     output_signature=
+    #         (tf.TensorSpec(shape=(BATCH_SIZE,) + dim[1:], dtype=tf.float32),
+    #             tf.TensorSpec(shape=(BATCH_SIZE,) + dim[1:], dtype=tf.float32),
+    #             tf.TensorSpec(shape=(BATCH_SIZE, prod(dim[1:])), dtype=tf.float32))
+    # )
 
     strategy = tf.distribute.MirroredStrategy()
 
@@ -388,8 +459,8 @@ def fitModelWithGenerator():
         batch_size=BATCH_SIZE,
         steps_per_epoch=STEPS_PER_EPOCH,
         epochs=EPOCHS,
-        validation_data=validationDataset,
-        validation_steps=VALIDATION_STEP,
+        #validation_data=validationDataset,
+        #validation_steps=VALIDATION_STEP,
         verbose=1
     )
 
@@ -410,10 +481,13 @@ def fitModelWithSequence():
 
     model = createCompiledModel(dim[1:])
 
+    callback = tf.keras.callbacks.EarlyStopping(monitor='loss', patience=2)
+
     history = model.fit(
         sequence,
         epochs=EPOCHS,
         validation_data=validationData.getValidationData(0),
+        callbacks=[callback],
         verbose=1
     )
 
@@ -435,29 +509,67 @@ def fitModelWithSequence():
 #
 # print(next(iterator))
 
+def main():
+    history, model = fitModelWithGenerator()
 
-history, model = fitModelWithGenerator()
+    print(history.history)
 
-print(history.history)
+    ds = xr.open_dataset(f'{XTRAIN_DATA_PATH}/wrfout_d02_2023-06-20_00%3A00%3A00')
+    data1 = ds[DATA_VAR][0][:CUBE_SIZE, :CUBE_SIZE, :CUBE_SIZE].to_numpy()
+    data1 = np.expand_dims(data1, axis=0)
 
-x0 = np.arange(4 * 4).reshape(4, 4) + 500
-x0 = np.expand_dims(x0, axis=0) #/ np.amax(x0)
+    ds.close()
 
-x1 = np.arange(4 * 4).reshape(4, 4) + 502
-x1 = np.expand_dims(x1, axis=0) #/ np.amax(x1)
+    ds = xr.open_dataset(f'{XTRAIN_DATA_PATH}/wrfout_d02_2023-06-20_00%3A10%3A00')
+    data2 = ds[DATA_VAR][0][:CUBE_SIZE, :CUBE_SIZE, :CUBE_SIZE].to_numpy()
+    data2 = np.expand_dims(data2, axis=0)
 
-y = np.arange(4 * 4).reshape(4, 4) + 501
+    ds.close()
 
-prediction = model.predict([x0, x1]).reshape(4, 4)
-print(prediction)
-#(prediction * 16)
-print(y)
-print(abs((prediction) - y))
-print((prediction - (y))**2)
-#print(abs((prediction*16) - y))
-#print((prediction - (y/16))**2)
+    prediction = model.predict([data1, data2]).reshape(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE)
+
+    #print(prediction)
+
+    average = (data1 + data2) / 2
+
+    ds = xr.open_dataset(f'{XTRAIN_DATA_PATH}/wrfout_d02_2023-06-20_00%3A05%3A00')
+    dataY = ds[DATA_VAR][0][:CUBE_SIZE, :CUBE_SIZE, :CUBE_SIZE].to_numpy()
+
+    #print(dataY)
+
+    ds.close()
+
+    average_error = abs(dataY - average)
+
+    prediction_error = abs(dataY - prediction)
+
+    print(prediction)
+
+    print(average)
+
+    print(dataY)
+
+    print("###########Errors###########")
+
+    print(average_error)
+    print(prediction_error)
+
+    print("###########Stats###########")
+
+    print(f"Average summed error: {np.sum(average_error)}")
+    print(f"Prediction summed error: {np.sum(prediction_error)}")
+
+    print(f"Average (max, min) error: {np.max(average_error), np.min(average_error)}")
+
+    print(f"Prediction (max, min) error: {np.max(prediction_error), np.min(prediction_error)}")
+
+    print(f"Average mean error: {np.mean(average_error)}")
+    print(f"Prediction mean error: {np.mean(prediction_error)}")
 
 
+    if SAVE_MODEL:
+        model.save(f'{KERAS_MODELS_PATH}/weatherModel.keras')
 
-if SAVE_MODEL:
-    model.save(f'{KERAS_MODELS_PATH}/weatherModel.keras')
+if __name__ == '__main__':
+    faulthandler.enable()
+    main()
