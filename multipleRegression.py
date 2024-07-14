@@ -14,7 +14,7 @@ BATCH_SIZE = (16, ) * 14
 EPOCHS = (25,) * len(BATCH_SIZE)
 VALIDATION_SPLIT = 0.2
 SAVE_MODEL = (True, ) * len(BATCH_SIZE)
-CALCULATE_STATS = (False, ) + (False, ) * len(BATCH_SIZE)  # Possibly change the first value to calculate stats
+CALCULATE_STATS = True
 NORMALIZE = (True,) * len(BATCH_SIZE)  # False implies standardization will be used instead
 CUBE_SIZE = (1, 2, 3, 4,) + (4,) * len(BATCH_SIZE)
 SHAPE_REDUCE = ([6, 7, 7],) * len(BATCH_SIZE)
@@ -34,7 +34,7 @@ DATA_VARS = [
 ]
 #VARIABLE_TEST = [{data: True for data in DATA_VARS}] * len(BATCH_SIZE)
 # Funky code, but we'll live
-VARIABLE_TEST = []
+VARIABLE_TEST = [{data: True for data in DATA_VARS}] * 4
 for i in range(len(DATA_VARS)):
     new_dict = {data: True if j <= i else False for j, data in enumerate(DATA_VARS)}
     VARIABLE_TEST.append(new_dict)
@@ -159,7 +159,7 @@ def get_max_true_variables():
 
 
 # Takes all the necessary data and loads it into a numpy array.
-def load_data(data_size, iteration):
+def load_data(data_size, iteration, data_stats):
     all_data = []
     length = int(data_size * (1 - VALIDATION_SPLIT))
     most_vars = get_max_true_variables()
@@ -172,9 +172,9 @@ def load_data(data_size, iteration):
                 continue
             data_array = ds[data]
             if NORMALIZE[iteration]:
-                data_array = normalize(data_array, data)
+                data_array = normalize(data_array, data, data_stats)
             else:
-                data_array = standardize(data_array, data)
+                data_array = standardize(data_array, data, data_stats)
             combined_data[data] = data_array
         ds.close()
         all_data.append(combined_data)
@@ -182,18 +182,18 @@ def load_data(data_size, iteration):
     return all_data
 
 
-def normalize(data_array, data) -> np.array:
+def normalize(data_array, data, data_stats) -> np.array:
     data_array = data_array.to_numpy()
-    return (data_array - DATA_VARS_MIN[data]) / (DATA_VARS_MAX[data] - DATA_VARS_MIN[data])
+    return (data_array - data_stats[0][data]) / (data_stats[1][data] - data_stats[0][data])
 
 
-def standardize(data_array, data) -> np.array:
+def standardize(data_array, data, data_stats) -> np.array:
     data_array = data_array.to_numpy()
-    return (data_array - DATA_VARS_MEAN[data]) / DATA_VARS_STD[data]
+    return (data_array - data_stats[2][data]) / data_stats[3][data]
 
 
 class WeatherDataGenerator:
-    def __init__(self, data_size, dim, length, data_dim, iteration, all_data, start_index):
+    def __init__(self, data_size, dim, length, data_dim, iteration, all_data, start_index, data_stats):
         self.data_size = data_size
         self.dim = dim
         self.length = length
@@ -202,6 +202,7 @@ class WeatherDataGenerator:
         self.index = 0
         self.region_index = (0, 0, 0)
         self.start_index = start_index
+        self.data_stats = data_stats
         if LOAD_DATA:
             self.all_data = all_data
 
@@ -242,9 +243,9 @@ class WeatherDataGenerator:
                                      region_index[2]: region_index[2] + CUBE_SIZE[self.iteration]]
             if not LOAD_DATA:
                 if NORMALIZE[self.iteration]:
-                    data_array = normalize(data_array, data)
+                    data_array = normalize(data_array, data, self.data_stats)
                 else:
-                    data_array = standardize(data_array, data)
+                    data_array = standardize(data_array, data, self.data_stats)
             combined_data = append_to_array(combined_data, data_array)
         if not LOAD_DATA:
             ds.close()
@@ -286,13 +287,13 @@ def create_compiled_model(input_shape):
     model.compile(
         optimizer=keras.optimizers.Adam(),
         loss=keras.losses.mean_squared_error,
-        metrics=['mae', 'msle']
+        weighted_metrics=['mae', 'msle']
     )
 
     return model
 
 
-def fit_model_with_generator(model, data_size, input_shape, data_dim, iteration, all_data):
+def fit_model_with_generator(model, data_size, input_shape, data_dim, iteration, all_data, data_stats):
     steps_per_epoch = int((((data_size * (1 - VALIDATION_SPLIT)) // BATCH_SIZE[iteration]) - 1)
                           * (data_dim[1] // CUBE_SIZE[iteration])
                           * (data_dim[2] // CUBE_SIZE[iteration])
@@ -303,7 +304,7 @@ def fit_model_with_generator(model, data_size, input_shape, data_dim, iteration,
     start_index = int(data_size * VALIDATION_SPLIT)
 
     dataset_generator = WeatherDataGenerator(data_size, input_shape, length, data_dim,
-                                             iteration, all_data, start_index)
+                                             iteration, all_data, start_index, data_stats)
 
     dataset = tf.data.Dataset.from_generator(
         dataset_generator,
@@ -319,7 +320,7 @@ def fit_model_with_generator(model, data_size, input_shape, data_dim, iteration,
     length = int(((data_size * VALIDATION_SPLIT) // BATCH_SIZE[iteration]) - 1)
 
     validation_generator = WeatherDataGenerator(data_size, input_shape, length, data_dim,
-                                                iteration, all_data, start_index)
+                                                iteration, all_data, start_index, data_stats)
 
     validation_dataset = tf.data.Dataset.from_generator(
         validation_generator,
@@ -415,15 +416,15 @@ def calculate_data_mean_std(data_size, iteration):
     return mean_value, std_value
 
 
-def get_prediction_data(index, data_size, iteration) -> np.array:
+def get_prediction_data(index, data_size, iteration, data_stats) -> np.array:
     path = get_file_path(index, data_size)
     ds = xr.open_dataset(path)
     data = None
     for d in DATA_VARS:
         if not VARIABLE_TEST[iteration][d]:
             continue
-        raw_data = ds[d][0][:CUBE_SIZE[iteration], :CUBE_SIZE[iteration], :CUBE_SIZE[iteration]].to_numpy()
-        normalized_data = (raw_data - DATA_VARS_MIN[d]) / (DATA_VARS_MAX[d] - DATA_VARS_MIN[d])
+        raw_data = ds[d][0][:CUBE_SIZE[iteration], :CUBE_SIZE[iteration], :CUBE_SIZE[iteration]]
+        normalized_data = normalize(raw_data, d, data_stats)
         data = append_to_array(data, normalized_data)
     ds.close()
     return data
@@ -432,10 +433,21 @@ def get_prediction_data(index, data_size, iteration) -> np.array:
 def main():
 
     # Not proud of this but was a quick solution.
-    global DATA_VARS_MIN, DATA_VARS_MAX, DATA_VARS_MEAN, DATA_VARS_STD
     data_size = calculate_data_size()
 
-    all_data = load_data(data_size, 0)
+    data_stats = [DATA_VARS_MIN, DATA_VARS_MAX, DATA_VARS_MEAN, DATA_VARS_STD]
+
+    if CALCULATE_STATS:
+        max_vars = get_max_true_variables()
+        data_range = calculate_data_range(data_size, max_vars)
+        data_mean_std = calculate_data_mean_std(data_size, max_vars)
+        # Reset stats as local variables.
+        data_stats = [data_range[0], data_range[1], data_mean_std[0], data_mean_std[1]]
+    
+    if LOAD_DATA:
+        all_data = load_data(data_size, 0, data_stats)
+    else:
+        all_data = None
 
     for i in range(TOTAL_ITERATIONS):
 
@@ -443,24 +455,15 @@ def main():
 
         data_shape = calculate_data_shape(i)
 
-        if CALCULATE_STATS[i]:
-            data_range = calculate_data_range(data_size, i)
-            data_mean_std = calculate_data_mean_std(data_size, i)
-            # Reset stats as local variables.
-            DATA_VARS_MIN = data_range[0]
-            DATA_VARS_MAX = data_range[1]
-            DATA_VARS_MEAN = data_mean_std[0]
-            DATA_VARS_STD = data_mean_std[1]
-
         model = create_compiled_model(input_shape)
 
-        hist, mod = fit_model_with_generator(model, data_size, input_shape, data_shape, i, all_data)
+        hist, mod = fit_model_with_generator(model, data_size, input_shape, data_shape, i, all_data, data_stats)
 
         # Now that the model is trained we can do predictions to see how well it works
 
-        data1 = np.expand_dims(get_prediction_data(0, data_size, i), axis=0)
-        data2 = np.expand_dims(get_prediction_data(2, data_size, i), axis=0)
-        actual_data = get_prediction_data(1, data_size, i)
+        data1 = np.expand_dims(get_prediction_data(0, data_size, i, data_stats), axis=0)
+        data2 = np.expand_dims(get_prediction_data(2, data_size, i, data_stats), axis=0)
+        actual_data = get_prediction_data(1, data_size, i, data_stats)
 
         prediction = mod.predict([data1, data2]).reshape(input_shape)
 
