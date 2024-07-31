@@ -39,9 +39,13 @@ DATA_VARS = [
     'QCLOUD'
 ]
 
-X_TRAIN_DATA_PATH = 'D:/Documents/Code/research/wrfout'
+# X_TRAIN_DATA_PATH = 'D:/Documents/Code/research/wrfout'
 
-#ds = xr.open_dataset(f'D:/Documents/Code/research/wrfout/wrfout_d02_2023-06-20_00%3A00%3A00')
+# ds = xr.open_dataset(f'D:/Documents/Code/research/wrfout/wrfout_d02_2023-06-20_00%3A00%3A00')
+
+# print(ds['QRAIN'][0][0][0].to_numpy())
+
+
 
 #print(ds["T"].shape)
 
