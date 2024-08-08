@@ -1,5 +1,6 @@
 import fnmatch
 import os
+import glob
 import tensorflow as tf
 import xarray as xr
 import numpy as np
@@ -11,8 +12,7 @@ from warnings import warn
 X_TRAIN_DATA_PATH = 'D:/Documents/Code/research/wrfout'
 KERAS_MODELS_PATH = 'D:/Documents/Code/research/keras-models'
 DATA_OUT_PATH = 'D:/Documents/Code/research/output'
-ALL_FILES = sorted([f for f in os.listdir(X_TRAIN_DATA_PATH) 
-             if os.path.isfile(os.path.join(X_TRAIN_DATA_PATH, f))])
+ALL_FILES = [os.path.basename(f) for f in glob.glob(X_TRAIN_DATA_PATH + "/wrfout*")]
 DATA_VARS = [
     'T',
     'P',
@@ -374,7 +374,7 @@ def calculate_data_shape(iteration):
 
 
 def calculate_data_size():
-    file_count = len(fnmatch.filter(os.listdir(X_TRAIN_DATA_PATH), '*'))
+    file_count = len(glob.glob(X_TRAIN_DATA_PATH + "/wrfout*"))
     return file_count
 
 
