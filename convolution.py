@@ -180,7 +180,6 @@ def create_model(input_shape):
     return CustomModel(inputs=[input1, input2], outputs=output)
 
 
-# TODO: Check if this gets aliased
 def compile_model(model):
     model.compile(
         optimizer="adam",

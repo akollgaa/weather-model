@@ -110,7 +110,6 @@ class CustomModel(nn.Module):
     def __init__(self, input_shape):
         super().__init__()
 
-        # TODO: Change the way input_shape is done here. Semantically it makes no sense
         self.seq_module = nn.Sequential(
             nn.Conv2d(1, 8, kernel_size=(2, 1), stride=1),
             nn.ReLU(),
